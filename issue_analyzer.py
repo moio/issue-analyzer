@@ -39,7 +39,7 @@ def get_github_headers() -> dict[str, str]:
     }
     token = os.environ.get("GITHUB_TOKEN")
     if token:
-        headers["Authorization"] = f"token {token}"
+        headers["Authorization"] = f"Bearer {token}"
     return headers
 
 

@@ -39,7 +39,7 @@ class TestGetGithubHeaders:
         """Test headers with GITHUB_TOKEN set."""
         with patch.dict("os.environ", {"GITHUB_TOKEN": "test_token"}):
             headers = get_github_headers()
-            assert headers["Authorization"] == "token test_token"
+            assert headers["Authorization"] == "Bearer test_token"
 
 
 class TestParseRepoString:
