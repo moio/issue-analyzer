@@ -11,6 +11,13 @@ Issue Analyzer - Download all GitHub issues from a repository.
 This script downloads all issues (including comments) from a GitHub repository
 and saves them to a JSON file for later analysis.
 
+Data is stored in a SQLite database as it is fetched, providing resilience
+against network errors and power loss. On restart, the script resumes from
+where it left off, skipping issues already in the database.
+
+Note: Issues already in the database are not refreshed on subsequent runs.
+To get fresh data, delete the database file (<repo>_issues.db).
+
 Usage:
     ./issue_analyzer.py <owner>/<repo> [output.json]
 
@@ -27,10 +34,16 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import sys
+import time
 from typing import Any
 
 import requests
+
+# Retry configuration
+MAX_RETRIES = 10
+INITIAL_BACKOFF = 1  # seconds
 
 
 def get_github_headers() -> dict[str, str]:
@@ -58,17 +71,162 @@ def parse_link_header(link_header: str | None) -> dict[str, str]:
     return links
 
 
+def request_with_retry(
+    url: str,
+    headers: dict[str, str],
+    params: dict[str, Any] | None = None,
+    timeout: int = 30,
+) -> requests.Response:
+    """Make an HTTP GET request with exponential backoff retry on errors.
+
+    Retries up to MAX_RETRIES times on HTTP errors and network errors,
+    with exponential backoff between retries. Logs full response body on errors.
+    """
+    last_exception: Exception | None = None
+    backoff = INITIAL_BACKOFF
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = requests.get(
+                url, headers=headers, params=params, timeout=timeout
+            )
+            response.raise_for_status()
+            return response
+        except requests.exceptions.HTTPError as e:
+            last_exception = e
+            response_body = ""
+            try:
+                response_body = e.response.text if e.response is not None else ""
+            except Exception:
+                response_body = "<unable to read response body>"
+
+            print(
+                f"HTTP error on attempt {attempt + 1}/{MAX_RETRIES}: {e}",
+                file=sys.stderr,
+            )
+            print(f"Response body: {response_body}", file=sys.stderr)
+
+            if attempt < MAX_RETRIES - 1:
+                print(f"Retrying in {backoff} seconds...", file=sys.stderr)
+                time.sleep(backoff)
+                backoff *= 2
+        except requests.exceptions.RequestException as e:
+            last_exception = e
+            print(
+                f"Network error on attempt {attempt + 1}/{MAX_RETRIES}: {e}",
+                file=sys.stderr,
+            )
+
+            if attempt < MAX_RETRIES - 1:
+                print(f"Retrying in {backoff} seconds...", file=sys.stderr)
+                time.sleep(backoff)
+                backoff *= 2
+
+    # All retries exhausted
+    raise last_exception  # type: ignore[misc]
+
+
+def init_database(db_path: str) -> sqlite3.Connection:
+    """Initialize the SQLite database with the required schema."""
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS issues (
+            id INTEGER PRIMARY KEY,
+            number INTEGER UNIQUE NOT NULL,
+            data TEXT NOT NULL
+        )
+    """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS comments (
+            id INTEGER PRIMARY KEY,
+            issue_number INTEGER NOT NULL,
+            data TEXT NOT NULL,
+            FOREIGN KEY (issue_number) REFERENCES issues(number)
+        )
+    """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_comments_issue_number
+        ON comments(issue_number)
+    """
+    )
+    conn.commit()
+    return conn
+
+
+def get_existing_issue_numbers(conn: sqlite3.Connection) -> set[int]:
+    """Get the set of issue numbers already in the database."""
+    cursor = conn.execute("SELECT number FROM issues")
+    return {row[0] for row in cursor.fetchall()}
+
+
+def save_issue_with_comments(
+    conn: sqlite3.Connection,
+    issue: dict[str, Any],
+    comments: list[dict[str, Any]],
+) -> None:
+    """Save an issue and its comments to the database in a single transaction."""
+    issue_number = issue["number"]
+    issue_id = issue["id"]
+
+    # Create a copy of the issue without comments_data for storage
+    issue_data = {k: v for k, v in issue.items() if k != "comments_data"}
+
+    conn.execute("BEGIN")
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO issues (id, number, data) VALUES (?, ?, ?)",
+            (issue_id, issue_number, json.dumps(issue_data, ensure_ascii=False)),
+        )
+        # Delete existing comments for this issue (in case of resume with partial data)
+        conn.execute("DELETE FROM comments WHERE issue_number = ?", (issue_number,))
+        for comment in comments:
+            conn.execute(
+                "INSERT INTO comments (id, issue_number, data) VALUES (?, ?, ?)",
+                (comment["id"], issue_number, json.dumps(comment, ensure_ascii=False)),
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def export_database_to_json(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Export all issues and comments from the database to a list of dicts."""
+    issues: list[dict[str, Any]] = []
+
+    cursor = conn.execute("SELECT number, data FROM issues ORDER BY number DESC")
+    for row in cursor.fetchall():
+        issue_number, issue_data = row
+        issue = json.loads(issue_data)
+
+        # Fetch comments for this issue
+        comments_cursor = conn.execute(
+            "SELECT data FROM comments WHERE issue_number = ? ORDER BY id",
+            (issue_number,),
+        )
+        comments = [json.loads(c[0]) for c in comments_cursor.fetchall()]
+        issue["comments_data"] = comments
+
+        issues.append(issue)
+
+    return issues
+
+
 def fetch_comments(comments_url: str, headers: dict[str, str]) -> list[dict[str, Any]]:
     """Fetch all comments for an issue using Link header pagination."""
     comments: list[dict[str, Any]] = []
     per_page = 100
 
-    params = {"per_page": per_page}
+    params: dict[str, Any] = {"per_page": per_page}
     next_url: str | None = comments_url
 
     while next_url:
-        response = requests.get(next_url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()
+        response = request_with_retry(next_url, headers, params=params)
 
         data = response.json()
         if not data:
@@ -87,24 +245,41 @@ def fetch_comments(comments_url: str, headers: dict[str, str]) -> list[dict[str,
 
 
 def download_issues(
-    owner: str, repo: str, limit: int | None = None
+    owner: str,
+    repo: str,
+    db_path: str,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Download all issues and their comments from a GitHub repository."""
+    """Download all issues and their comments from a GitHub repository.
+
+    Uses SQLite database for persistence. On restart, skips issues already
+    in the database.
+    """
     headers = get_github_headers()
     issues_url = f"https://api.github.com/repos/{owner}/{repo}/issues"
+
+    # Initialize database and get existing issues
+    conn = init_database(db_path)
+    existing_issues = get_existing_issue_numbers(conn)
+
+    if existing_issues:
+        print(
+            f"Resuming: found {len(existing_issues)} issues already in database",
+            file=sys.stderr,
+        )
 
     limit_str = f" (limit: {limit})" if limit else ""
     print(f"Fetching issues from {owner}/{repo}{limit_str}...", file=sys.stderr)
 
     # Fetch issues, filtering out PRs as we go to respect the limit correctly
-    issues: list[dict[str, Any]] = []
+    issues_to_process: list[dict[str, Any]] = []
+    total_issues_count = len(existing_issues)
     per_page = 100
     params: dict[str, Any] = {"per_page": per_page, "state": "all"}
     next_url: str | None = issues_url
 
     while next_url:
-        response = requests.get(next_url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()
+        response = request_with_retry(next_url, headers, params=params)
 
         data = response.json()
         if not data:
@@ -113,12 +288,16 @@ def download_issues(
         # Filter out pull requests as we fetch
         for item in data:
             if "pull_request" not in item:
-                issues.append(item)
-                if limit and len(issues) >= limit:
+                issue_number = item["number"]
+                if issue_number not in existing_issues:
+                    issues_to_process.append(item)
+                total_issues_count += 1 if issue_number not in existing_issues else 0
+
+                if limit and total_issues_count >= limit:
                     break
 
         # Check if we've reached the limit
-        if limit and len(issues) >= limit:
+        if limit and total_issues_count >= limit:
             break
 
         # Use Link header for cursor-based pagination
@@ -126,21 +305,38 @@ def download_issues(
         next_url = links.get("next")
         params = {}
 
-    print(f"Found {len(issues)} issues. Fetching comments...", file=sys.stderr)
+    new_issues_count = len(issues_to_process)
+    if new_issues_count == 0:
+        print("No new issues to fetch.", file=sys.stderr)
+    else:
+        print(
+            f"Found {new_issues_count} new issues to fetch. Processing...",
+            file=sys.stderr,
+        )
 
-    # Fetch comments for each issue
-    for i, issue in enumerate(issues):
+    # Fetch comments for each new issue and save to database
+    for i, issue in enumerate(issues_to_process):
         if issue.get("comments", 0) > 0:
             comments_url = issue["comments_url"]
-            issue["comments_data"] = fetch_comments(comments_url, headers)
+            comments = fetch_comments(comments_url, headers)
         else:
-            issue["comments_data"] = []
+            comments = []
+
+        # Save issue with comments in a single transaction
+        save_issue_with_comments(conn, issue, comments)
 
         # Progress indicator
-        if (i + 1) % 10 == 0 or i + 1 == len(issues):
-            print(f"  Processed {i + 1}/{len(issues)} issues", file=sys.stderr)
+        if (i + 1) % 10 == 0 or i + 1 == new_issues_count:
+            print(
+                f"  Processed {i + 1}/{new_issues_count} new issues",
+                file=sys.stderr,
+            )
 
-    return issues
+    # Export all data from database to JSON format
+    all_issues = export_database_to_json(conn)
+    conn.close()
+
+    return all_issues
 
 
 def parse_repo_string(repo_string: str) -> tuple[str, str]:
@@ -165,6 +361,10 @@ Examples:
     ./issue_analyzer.py --limit 100 rancher/rancher
 
 Set GITHUB_TOKEN env var for higher rate limits.
+
+Data is stored in a SQLite database (<repo>_issues.db) as it is fetched.
+On restart, the script resumes from where it left off.
+Note: Issues already in the database are not refreshed.
         """,
     )
     parser.add_argument(
@@ -194,9 +394,11 @@ Set GITHUB_TOKEN env var for higher rate limits.
         return 1
 
     output_file = args.output or f"{repo}_issues.json"
+    # Derive database path from output file
+    db_path = output_file.rsplit(".", 1)[0] + ".db"
 
     try:
-        issues = download_issues(owner, repo, limit=args.limit)
+        issues = download_issues(owner, repo, db_path, limit=args.limit)
     except requests.exceptions.HTTPError as e:
         print(f"Error fetching issues: {e}", file=sys.stderr)
         return 1

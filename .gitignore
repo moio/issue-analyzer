@@ -3,6 +3,10 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Issue analyzer output files
+*_issues.json
+*_issues.db
+
 # C extensions
 *.so
 

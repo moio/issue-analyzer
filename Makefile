@@ -20,16 +20,16 @@ e2e:
 	./issue_analyzer.py --limit 100 rancher/dartboard /tmp/dartboard_issues.json
 	@echo "Verifying output file..."
 	@python3 -c "import json; data = json.load(open('/tmp/dartboard_issues.json')); print(f'Downloaded {len(data)} issues'); assert len(data) <= 100, 'Expected at most 100 issues'"
-	@rm -f /tmp/dartboard_issues.json
+	@rm -f /tmp/dartboard_issues.json /tmp/dartboard_issues.db
 	@echo "E2E test 1 passed!"
 	@echo ""
 	@echo "Running e2e test against rancher/rancher (limit 100)..."
 	./issue_analyzer.py --limit 100 rancher/rancher /tmp/rancher_issues.json
 	@echo "Verifying output file..."
 	@python3 -c "import json; data = json.load(open('/tmp/rancher_issues.json')); print(f'Downloaded {len(data)} issues'); assert len(data) <= 100, 'Expected at most 100 issues'"
-	@rm -f /tmp/rancher_issues.json
+	@rm -f /tmp/rancher_issues.json /tmp/rancher_issues.db
 	@echo "E2E test 2 passed!"
 
 # Clean up generated files
 clean:
-	rm -f *_issues.json
+	rm -f *_issues.json *_issues.db
