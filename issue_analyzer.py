@@ -273,7 +273,7 @@ def download_issues(
 
     # Fetch issues, filtering out PRs as we go to respect the limit correctly
     issues_to_process: list[dict[str, Any]] = []
-    total_issues_count = len(existing_issues)
+    seen_issue_numbers: set[int] = set(existing_issues)
     per_page = 100
     params: dict[str, Any] = {"per_page": per_page, "state": "all"}
     next_url: str | None = issues_url
@@ -289,15 +289,15 @@ def download_issues(
         for item in data:
             if "pull_request" not in item:
                 issue_number = item["number"]
-                if issue_number not in existing_issues:
+                if issue_number not in seen_issue_numbers:
                     issues_to_process.append(item)
-                total_issues_count += 1 if issue_number not in existing_issues else 0
+                    seen_issue_numbers.add(issue_number)
 
-                if limit and total_issues_count >= limit:
+                if limit and len(seen_issue_numbers) >= limit:
                     break
 
         # Check if we've reached the limit
-        if limit and total_issues_count >= limit:
+        if limit and len(seen_issue_numbers) >= limit:
             break
 
         # Use Link header for cursor-based pagination
