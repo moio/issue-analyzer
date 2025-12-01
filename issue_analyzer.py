@@ -17,6 +17,7 @@ Usage:
 Examples:
     ./issue_analyzer.py rancher/dartboard
     ./issue_analyzer.py rancher/dartboard issues.json
+    ./issue_analyzer.py --limit 100 rancher/rancher
 
 Environment variables:
     GITHUB_TOKEN: Set for higher rate limits (create at https://github.com/settings/tokens)
@@ -25,6 +26,7 @@ Environment variables:
 import argparse
 import json
 import os
+import re
 import sys
 from typing import Any
 
@@ -43,42 +45,29 @@ def get_github_headers() -> dict[str, str]:
     return headers
 
 
-def fetch_all_pages(url: str, headers: dict[str, str]) -> list[dict[str, Any]]:
-    """Fetch all pages from a paginated GitHub API endpoint."""
-    results: list[dict[str, Any]] = []
-    page = 1
-    per_page = 100
+def parse_link_header(link_header: str | None) -> dict[str, str]:
+    """Parse GitHub's Link header to extract pagination URLs."""
+    if not link_header:
+        return {}
 
-    while True:
-        params = {"page": page, "per_page": per_page, "state": "all"}
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()
-
-        data = response.json()
-        if not data:
-            break
-
-        results.extend(data)
-        page += 1
-
-        # Check if there are more pages
-        if len(data) < per_page:
-            break
-
-    return results
+    links = {}
+    for part in link_header.split(","):
+        match = re.match(r'<([^>]+)>;\s*rel="([^"]+)"', part.strip())
+        if match:
+            links[match.group(2)] = match.group(1)
+    return links
 
 
 def fetch_comments(comments_url: str, headers: dict[str, str]) -> list[dict[str, Any]]:
-    """Fetch all comments for an issue."""
+    """Fetch all comments for an issue using Link header pagination."""
     comments: list[dict[str, Any]] = []
-    page = 1
     per_page = 100
 
-    while True:
-        params = {"page": page, "per_page": per_page}
-        response = requests.get(
-            comments_url, headers=headers, params=params, timeout=30
-        )
+    params = {"per_page": per_page}
+    next_url: str | None = comments_url
+
+    while next_url:
+        response = requests.get(next_url, headers=headers, params=params, timeout=30)
         response.raise_for_status()
 
         data = response.json()
@@ -86,24 +75,56 @@ def fetch_comments(comments_url: str, headers: dict[str, str]) -> list[dict[str,
             break
 
         comments.extend(data)
-        page += 1
 
-        if len(data) < per_page:
-            break
+        # Use Link header for cursor-based pagination
+        links = parse_link_header(response.headers.get("Link"))
+        next_url = links.get("next")
+
+        # Clear params for subsequent requests
+        params = {}
 
     return comments
 
 
-def download_issues(owner: str, repo: str) -> list[dict[str, Any]]:
+def download_issues(
+    owner: str, repo: str, limit: int | None = None
+) -> list[dict[str, Any]]:
     """Download all issues and their comments from a GitHub repository."""
     headers = get_github_headers()
     issues_url = f"https://api.github.com/repos/{owner}/{repo}/issues"
 
-    print(f"Fetching issues from {owner}/{repo}...", file=sys.stderr)
-    issues = fetch_all_pages(issues_url, headers)
+    limit_str = f" (limit: {limit})" if limit else ""
+    print(f"Fetching issues from {owner}/{repo}{limit_str}...", file=sys.stderr)
 
-    # Filter out pull requests (they appear in the issues API)
-    issues = [issue for issue in issues if "pull_request" not in issue]
+    # Fetch issues, filtering out PRs as we go to respect the limit correctly
+    issues: list[dict[str, Any]] = []
+    per_page = 100
+    params: dict[str, Any] = {"per_page": per_page, "state": "all"}
+    next_url: str | None = issues_url
+
+    while next_url:
+        response = requests.get(next_url, headers=headers, params=params, timeout=30)
+        response.raise_for_status()
+
+        data = response.json()
+        if not data:
+            break
+
+        # Filter out pull requests as we fetch
+        for item in data:
+            if "pull_request" not in item:
+                issues.append(item)
+                if limit and len(issues) >= limit:
+                    break
+
+        # Check if we've reached the limit
+        if limit and len(issues) >= limit:
+            break
+
+        # Use Link header for cursor-based pagination
+        links = parse_link_header(response.headers.get("Link"))
+        next_url = links.get("next")
+        params = {}
 
     print(f"Found {len(issues)} issues. Fetching comments...", file=sys.stderr)
 
@@ -141,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
 Examples:
     ./issue_analyzer.py rancher/dartboard
     ./issue_analyzer.py rancher/dartboard issues.json
+    ./issue_analyzer.py --limit 100 rancher/rancher
 
 Set GITHUB_TOKEN env var for higher rate limits.
         """,
@@ -155,6 +177,13 @@ Set GITHUB_TOKEN env var for higher rate limits.
         default=None,
         help="Output JSON file (default: <repo>_issues.json)",
     )
+    parser.add_argument(
+        "--limit",
+        "-l",
+        type=int,
+        default=None,
+        help="Maximum number of issues to download (default: all)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -167,7 +196,7 @@ Set GITHUB_TOKEN env var for higher rate limits.
     output_file = args.output or f"{repo}_issues.json"
 
     try:
-        issues = download_issues(owner, repo)
+        issues = download_issues(owner, repo, limit=args.limit)
     except requests.exceptions.HTTPError as e:
         print(f"Error fetching issues: {e}", file=sys.stderr)
         return 1
