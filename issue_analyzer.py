@@ -12,14 +12,14 @@ This script downloads all issues (including comments) from a GitHub repository
 and saves them to a JSON file for later analysis.
 
 Usage:
-    uv run issue_analyzer.py <owner>/<repo> [output.json]
+    ./issue_analyzer.py <owner>/<repo> [output.json]
 
 Examples:
-    uv run issue_analyzer.py rancher/dartboard
-    uv run issue_analyzer.py rancher/dartboard issues.json
+    ./issue_analyzer.py rancher/dartboard
+    ./issue_analyzer.py rancher/dartboard issues.json
 
 Environment variables:
-    GITHUB_TOKEN: Optional GitHub personal access token for higher rate limits
+    GITHUB_TOKEN: Set for higher rate limits (create at https://github.com/settings/tokens)
 """
 
 import argparse
@@ -139,9 +139,10 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    uv run issue_analyzer.py rancher/dartboard
-    uv run issue_analyzer.py rancher/dartboard issues.json
-    GITHUB_TOKEN=ghp_xxx uv run issue_analyzer.py rancher/dartboard
+    ./issue_analyzer.py rancher/dartboard
+    ./issue_analyzer.py rancher/dartboard issues.json
+
+Set GITHUB_TOKEN env var for higher rate limits.
         """,
     )
     parser.add_argument(

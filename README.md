@@ -6,13 +6,14 @@ A Python tool to download all GitHub issues from a repository (including comment
 
 ```bash
 # Download all issues from a repository
-uv run issue_analyzer.py rancher/dartboard
+./issue_analyzer.py rancher/dartboard
 
 # Save to a specific file
-uv run issue_analyzer.py rancher/dartboard issues.json
+./issue_analyzer.py rancher/dartboard issues.json
 
 # Use with GitHub token for higher rate limits
-GITHUB_TOKEN=ghp_xxx uv run issue_analyzer.py rancher/dartboard
+export GITHUB_TOKEN=your_token
+./issue_analyzer.py rancher/dartboard
 ```
 
 ## Requirements
@@ -21,11 +22,7 @@ GITHUB_TOKEN=ghp_xxx uv run issue_analyzer.py rancher/dartboard
 
 ## Installation
 
-No installation required! The script uses inline dependencies via uv. Just run:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+No installation required! The script uses inline dependencies via uv. Install uv following the [official instructions](https://docs.astral.sh/uv/getting-started/installation/).
 
 ## Development
 

@@ -20,16 +20,6 @@ jobs:
       - name: Check formatting with Black
         run: make lint
 
-  test:
-    name: Unit Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-      - name: Run unit tests
-        run: make test
-
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest

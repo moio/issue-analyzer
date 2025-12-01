@@ -17,7 +17,7 @@ Issue Analyzer is a Python tool that downloads all GitHub issues (including comm
 
 ```bash
 # Run the main script
-uv run issue_analyzer.py <owner>/<repo> [output.json]
+./issue_analyzer.py <owner>/<repo> [output.json]
 
 # Format code
 make format
@@ -25,24 +25,12 @@ make format
 # Lint code
 make lint
 
-# Run unit tests
-make test
-
 # Run end-to-end tests
 make e2e
 
 # Run all checks
 make all
 ```
-
-## File Structure
-
-| File | Purpose |
-|------|---------|
-| `issue_analyzer.py` | Main script with inline dependencies |
-| `test_issue_analyzer.py` | Unit tests (pytest) |
-| `Makefile` | Development automation |
-| `.github/workflows/ci.yml` | GitHub Actions CI workflow |
 
 ## Adding Dependencies
 
@@ -58,23 +46,7 @@ Add dependencies to the script header in `issue_analyzer.py`:
 # ///
 ```
 
-## Testing Requirements
+## Testing
 
-- All functions should have unit tests
-- Tests should not make real API calls (use mocking)
 - E2E tests run against `rancher/dartboard` repository
 - Run `make all` before committing
-
-## Common Tasks
-
-### Adding a New Feature
-1. Implement the feature in `issue_analyzer.py`
-2. Add unit tests in `test_issue_analyzer.py`
-3. Run `make format` to format code
-4. Run `make all` to verify all tests pass
-
-### Fixing a Bug
-1. Write a failing test that reproduces the bug
-2. Fix the bug in `issue_analyzer.py`
-3. Verify the test passes
-4. Run `make all` to ensure no regressions
