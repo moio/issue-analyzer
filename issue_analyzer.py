@@ -25,6 +25,7 @@ Examples:
     ./issue_analyzer.py rancher/dartboard
     ./issue_analyzer.py rancher/dartboard issues.json
     ./issue_analyzer.py --limit 100 rancher/rancher
+    ./issue_analyzer.py --rate-limit 1000 rancher/rancher
 
 Environment variables:
     GITHUB_TOKEN: Set for higher rate limits (create at https://github.com/settings/tokens)
@@ -44,6 +45,39 @@ import requests
 # Retry configuration
 MAX_RETRIES = 10
 INITIAL_BACKOFF = 1  # seconds
+
+# Rate limiting configuration
+DEFAULT_RATE_LIMIT = 5000  # requests per hour (GitHub default for authenticated users)
+RATE_LIMIT_USAGE_FRACTION = 0.9  # Use only 90% of the rate limit
+
+
+class RateLimiter:
+    """Rate limiter that tracks request timing and adds delays to stay within limits."""
+
+    def __init__(self, requests_per_hour: int) -> None:
+        """Initialize the rate limiter.
+
+        Args:
+            requests_per_hour: Maximum requests allowed per hour.
+        """
+        # Apply 90% safety margin
+        effective_limit = int(requests_per_hour * RATE_LIMIT_USAGE_FRACTION)
+        self.min_interval = 3600.0 / effective_limit  # seconds between requests
+        self.last_request_time: float | None = None
+
+    def wait_if_needed(self) -> None:
+        """Wait if necessary to stay within rate limits."""
+        if self.last_request_time is None:
+            self.last_request_time = time.time()
+            return
+
+        elapsed = time.time() - self.last_request_time
+        wait_time = self.min_interval - elapsed
+
+        if wait_time > 0:
+            time.sleep(wait_time)
+
+        self.last_request_time = time.time()
 
 
 def get_github_headers() -> dict[str, str]:
@@ -76,6 +110,7 @@ def request_with_retry(
     headers: dict[str, str],
     params: dict[str, Any] | None = None,
     timeout: int = 30,
+    rate_limiter: RateLimiter | None = None,
 ) -> requests.Response:
     """Make an HTTP GET request with exponential backoff retry on errors.
 
@@ -87,6 +122,9 @@ def request_with_retry(
 
     for attempt in range(MAX_RETRIES):
         try:
+            if rate_limiter:
+                rate_limiter.wait_if_needed()
+
             response = requests.get(
                 url, headers=headers, params=params, timeout=timeout
             )
@@ -217,7 +255,11 @@ def export_database_to_json(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return issues
 
 
-def fetch_comments(comments_url: str, headers: dict[str, str]) -> list[dict[str, Any]]:
+def fetch_comments(
+    comments_url: str,
+    headers: dict[str, str],
+    rate_limiter: RateLimiter | None = None,
+) -> list[dict[str, Any]]:
     """Fetch all comments for an issue using Link header pagination."""
     comments: list[dict[str, Any]] = []
     per_page = 100
@@ -226,7 +268,9 @@ def fetch_comments(comments_url: str, headers: dict[str, str]) -> list[dict[str,
     next_url: str | None = comments_url
 
     while next_url:
-        response = request_with_retry(next_url, headers, params=params)
+        response = request_with_retry(
+            next_url, headers, params=params, rate_limiter=rate_limiter
+        )
 
         data = response.json()
         if not data:
@@ -249,6 +293,7 @@ def download_issues(
     repo: str,
     db_path: str,
     limit: int | None = None,
+    rate_limit: int = DEFAULT_RATE_LIMIT,
 ) -> list[dict[str, Any]]:
     """Download all issues and their comments from a GitHub repository.
 
@@ -257,6 +302,7 @@ def download_issues(
     """
     headers = get_github_headers()
     issues_url = f"https://api.github.com/repos/{owner}/{repo}/issues"
+    rate_limiter = RateLimiter(rate_limit)
 
     # Initialize database and get existing issues
     conn = init_database(db_path)
@@ -279,7 +325,9 @@ def download_issues(
     next_url: str | None = issues_url
 
     while next_url:
-        response = request_with_retry(next_url, headers, params=params)
+        response = request_with_retry(
+            next_url, headers, params=params, rate_limiter=rate_limiter
+        )
 
         data = response.json()
         if not data:
@@ -318,7 +366,7 @@ def download_issues(
     for i, issue in enumerate(issues_to_process):
         if issue.get("comments", 0) > 0:
             comments_url = issue["comments_url"]
-            comments = fetch_comments(comments_url, headers)
+            comments = fetch_comments(comments_url, headers, rate_limiter)
         else:
             comments = []
 
@@ -359,6 +407,7 @@ Examples:
     ./issue_analyzer.py rancher/dartboard
     ./issue_analyzer.py rancher/dartboard issues.json
     ./issue_analyzer.py --limit 100 rancher/rancher
+    ./issue_analyzer.py --rate-limit 1000 rancher/rancher
 
 Set GITHUB_TOKEN env var for higher rate limits.
 
@@ -384,6 +433,14 @@ Note: Issues already in the database are not refreshed.
         default=None,
         help="Maximum number of issues to download (default: all)",
     )
+    parser.add_argument(
+        "--rate-limit",
+        "-r",
+        type=int,
+        default=DEFAULT_RATE_LIMIT,
+        help=f"Maximum requests per hour (default: {DEFAULT_RATE_LIMIT}). "
+        "Actual usage is limited to 90%% of this value.",
+    )
 
     args = parser.parse_args(argv)
 
@@ -398,7 +455,9 @@ Note: Issues already in the database are not refreshed.
     db_path = output_file.rsplit(".", 1)[0] + ".db"
 
     try:
-        issues = download_issues(owner, repo, db_path, limit=args.limit)
+        issues = download_issues(
+            owner, repo, db_path, limit=args.limit, rate_limit=args.rate_limit
+        )
     except requests.exceptions.HTTPError as e:
         print(f"Error fetching issues: {e}", file=sys.stderr)
         return 1
