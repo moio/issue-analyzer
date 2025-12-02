@@ -8,18 +8,35 @@ You need [uv](https://docs.astral.sh/uv/) installed. uv is a fast Python package
 
 Install uv following the [official instructions](https://docs.astral.sh/uv/getting-started/installation/).
 
-## Running the Tool
+## Running the Tools
 
-The script uses inline script dependencies (PEP 723), so you don't need to install anything manually. Just run:
+The scripts use inline script dependencies (PEP 723), so you don't need to install anything manually.
+
+### Downloading Issues
 
 ```bash
-./issue_analyzer.py <owner>/<repo> [output.json]
+./issue_downloader.py <owner>/<repo> [output.db]
 ```
 
 For example:
 ```bash
-./issue_analyzer.py rancher/dartboard
+./issue_downloader.py rancher/dartboard
 ```
+
+This downloads all issues to a SQLite database (`dartboard_issues.db` by default).
+
+### Exporting to JSON
+
+```bash
+./issue_summarizer.py <input.db> [output.json]
+```
+
+For example:
+```bash
+./issue_summarizer.py dartboard_issues.db
+```
+
+This exports issues from the database to a JSON file (`dartboard_issues.json` by default).
 
 uv will automatically install the required dependencies on first run.
 
@@ -48,12 +65,12 @@ For repositories with many issues, you may hit GitHub's rate limit. Create a per
 ```bash
 read -s GITHUB_TOKEN
 export GITHUB_TOKEN
-./issue_analyzer.py rancher/dartboard
+./issue_downloader.py rancher/dartboard
 ```
 
 ## How Dependencies Work
 
-This project uses [PEP 723](https://peps.python.org/pep-0723/) inline script metadata. Dependencies are declared directly in the script header:
+This project uses [PEP 723](https://peps.python.org/pep-0723/) inline script metadata. Dependencies are declared directly in each script's header:
 
 ```python
 # /// script
@@ -64,20 +81,20 @@ This project uses [PEP 723](https://peps.python.org/pep-0723/) inline script met
 # ///
 ```
 
-When you run `./issue_analyzer.py`, uv:
+When you run a script, uv:
 1. Reads the dependency metadata from the script
 2. Creates an isolated virtual environment
 3. Installs the required packages
 4. Executes the script
 
-This means no separate `requirements.txt` or `pyproject.toml` is needed for the main script.
+This means no separate `requirements.txt` or `pyproject.toml` is needed for the scripts.
 
 ## Adding New Dependencies
 
-To add a new dependency:
-1. Add it to the `dependencies` list in the script header
+To add a new dependency to a script:
+1. Add it to the `dependencies` list in the script's header
 2. Run the script - uv will automatically install the new dependency
 
 ## Testing
 
-End-to-end tests verify the complete workflow against a real GitHub repository (rancher/dartboard).
+End-to-end tests verify the complete workflow against real GitHub repositories (rancher/dartboard and rancher/rancher). Tests download issues using `issue_downloader.py` and then export them using `issue_summarizer.py`.

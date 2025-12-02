@@ -6,10 +6,10 @@
 # ]
 # ///
 """
-Issue Analyzer - Download all GitHub issues from a repository.
+Issue Downloader - Download all GitHub issues from a repository to SQLite.
 
 This script downloads all issues (including comments) from a GitHub repository
-and saves them to a JSON file for later analysis.
+and saves them to a SQLite database for later analysis.
 
 Data is stored in a SQLite database as it is fetched, providing resilience
 against network errors and power loss. On restart, the script resumes from
@@ -19,13 +19,13 @@ Note: Issues already in the database are not refreshed on subsequent runs.
 To get fresh data, delete the database file (<repo>_issues.db).
 
 Usage:
-    ./issue_analyzer.py <owner>/<repo> [output.json]
+    ./issue_downloader.py <owner>/<repo> [output.db]
 
 Examples:
-    ./issue_analyzer.py rancher/dartboard
-    ./issue_analyzer.py rancher/dartboard issues.json
-    ./issue_analyzer.py --limit 100 rancher/rancher
-    ./issue_analyzer.py --rate-limit 1000 rancher/rancher
+    ./issue_downloader.py rancher/dartboard
+    ./issue_downloader.py rancher/dartboard issues.db
+    ./issue_downloader.py --limit 100 rancher/rancher
+    ./issue_downloader.py --rate-limit 1000 rancher/rancher
 
 Environment variables:
     GITHUB_TOKEN: Set for higher rate limits (create at https://github.com/settings/tokens)
@@ -233,104 +233,6 @@ def save_issue_with_comments(
         raise
 
 
-def filter_issue_fields(issue: dict[str, Any]) -> dict[str, Any]:
-    """Filter issue to keep only required fields."""
-    filtered: dict[str, Any] = {}
-
-    # Simple fields
-    for field in [
-        "number",
-        "title",
-        "state",
-        "created_at",
-        "updated_at",
-        "body",
-        "author_association",
-        "state_reason",
-    ]:
-        if field in issue:
-            filtered[field] = issue[field]
-
-    # Nested user fields
-    if "user" in issue and issue["user"]:
-        filtered["user"] = {
-            "login": issue["user"].get("login"),
-            "type": issue["user"].get("type"),
-        }
-
-    # Nested reactions field
-    if "reactions" in issue and issue["reactions"]:
-        filtered["reactions"] = {
-            "total_count": issue["reactions"].get("total_count"),
-        }
-
-    return filtered
-
-
-def filter_comment_fields(comment: dict[str, Any]) -> dict[str, Any]:
-    """Filter comment to keep only required fields."""
-    filtered: dict[str, Any] = {}
-
-    # Simple fields
-    for field in [
-        "created_at",
-        "updated_at",
-        "body",
-        "author_association",
-    ]:
-        if field in comment:
-            filtered[field] = comment[field]
-
-    # Nested user fields
-    if "user" in comment and comment["user"]:
-        filtered["user"] = {
-            "login": comment["user"].get("login"),
-            "type": comment["user"].get("type"),
-        }
-
-    # Nested reactions field
-    if "reactions" in comment and comment["reactions"]:
-        filtered["reactions"] = {
-            "total_count": comment["reactions"].get("total_count"),
-        }
-
-    return filtered
-
-
-def export_database_to_json(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Export all issues and comments from the database to a list of dicts.
-
-    Filters out unnecessary fields to keep only essential information:
-    - For issues: number, title, user/login, user/type, state, created_at,
-      updated_at, body, author_association, reactions/total_count, state_reason
-    - For comments: user/login, user/type, created_at, updated_at, body,
-      author_association, reactions/total_count
-    """
-    issues: list[dict[str, Any]] = []
-
-    cursor = conn.execute("SELECT number, data FROM issues ORDER BY number DESC")
-    for row in cursor.fetchall():
-        issue_number, issue_data = row
-        issue = json.loads(issue_data)
-
-        # Fetch and filter comments for this issue
-        comments_cursor = conn.execute(
-            "SELECT data FROM comments WHERE issue_number = ? ORDER BY id",
-            (issue_number,),
-        )
-        comments = [
-            filter_comment_fields(json.loads(c[0])) for c in comments_cursor.fetchall()
-        ]
-
-        # Filter issue fields and add comments
-        filtered_issue = filter_issue_fields(issue)
-        filtered_issue["comments_data"] = comments
-
-        issues.append(filtered_issue)
-
-    return issues
-
-
 def fetch_comments(
     comments_url: str,
     headers: dict[str, str],
@@ -370,11 +272,13 @@ def download_issues(
     db_path: str,
     limit: int | None = None,
     rate_limit: int = DEFAULT_RATE_LIMIT,
-) -> list[dict[str, Any]]:
+) -> int:
     """Download all issues and their comments from a GitHub repository.
 
     Uses SQLite database for persistence. On restart, skips issues already
     in the database.
+
+    Returns the total number of issues in the database after downloading.
     """
     headers = get_github_headers()
     issues_url = f"https://api.github.com/repos/{owner}/{repo}/issues"
@@ -456,11 +360,12 @@ def download_issues(
                 file=sys.stderr,
             )
 
-    # Export all data from database to JSON format
-    all_issues = export_database_to_json(conn)
+    # Get total count of issues in database
+    cursor = conn.execute("SELECT COUNT(*) FROM issues")
+    total_issues = cursor.fetchone()[0]
     conn.close()
 
-    return all_issues
+    return total_issues
 
 
 def parse_repo_string(repo_string: str) -> tuple[str, str]:
@@ -474,16 +379,16 @@ def parse_repo_string(repo_string: str) -> tuple[str, str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Main entry point for the issue analyzer."""
+    """Main entry point for the issue downloader."""
     parser = argparse.ArgumentParser(
-        description="Download all GitHub issues from a repository to JSON",
+        description="Download all GitHub issues from a repository to SQLite",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    ./issue_analyzer.py rancher/dartboard
-    ./issue_analyzer.py rancher/dartboard issues.json
-    ./issue_analyzer.py --limit 100 rancher/rancher
-    ./issue_analyzer.py --rate-limit 1000 rancher/rancher
+    ./issue_downloader.py rancher/dartboard
+    ./issue_downloader.py rancher/dartboard issues.db
+    ./issue_downloader.py --limit 100 rancher/rancher
+    ./issue_downloader.py --rate-limit 1000 rancher/rancher
 
 Set GITHUB_TOKEN env var for higher rate limits.
 
@@ -500,7 +405,7 @@ Note: Issues already in the database are not refreshed.
         "output",
         nargs="?",
         default=None,
-        help="Output JSON file (default: <repo>_issues.json)",
+        help="Output SQLite database file (default: <repo>_issues.db)",
     )
     parser.add_argument(
         "--limit",
@@ -526,12 +431,10 @@ Note: Issues already in the database are not refreshed.
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    output_file = args.output or f"{repo}_issues.json"
-    # Derive database path from output file
-    db_path = output_file.rsplit(".", 1)[0] + ".db"
+    db_path = args.output or f"{repo}_issues.db"
 
     try:
-        issues = download_issues(
+        total_issues = download_issues(
             owner, repo, db_path, limit=args.limit, rate_limit=args.rate_limit
         )
     except requests.exceptions.HTTPError as e:
@@ -541,11 +444,7 @@ Note: Issues already in the database are not refreshed.
         print(f"Network error: {e}", file=sys.stderr)
         return 1
 
-    # Write to JSON file
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(issues, f, indent=2, ensure_ascii=False)
-
-    print(f"Saved {len(issues)} issues to {output_file}", file=sys.stderr)
+    print(f"Database {db_path} contains {total_issues} issues", file=sys.stderr)
     return 0
 
 
