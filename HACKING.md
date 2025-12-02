@@ -65,7 +65,7 @@ For repositories with many issues, you may hit GitHub's rate limit. Create a per
 ```bash
 read -s GITHUB_TOKEN
 export GITHUB_TOKEN
-./issue_analyzer.py rancher/dartboard
+./issue_downloader.py rancher/dartboard
 ```
 
 ## How Dependencies Work

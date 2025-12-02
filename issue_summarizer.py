@@ -67,7 +67,7 @@ The input database should be created by issue_downloader.py.
         "output",
         nargs="?",
         default=None,
-        help="Output JSON file (default: <input_basename>_issues.json)",
+        help="Output JSON file (default: replaces .db extension with .json)",
     )
 
     args = parser.parse_args(argv)
