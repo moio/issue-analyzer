@@ -5,27 +5,32 @@ A Python tool to download all GitHub issues from a repository (including comment
 ## Quick Start
 
 ```bash
-# Download all issues from a repository
-./issue_analyzer.py rancher/dartboard
+# Download all issues from a repository to SQLite database
+./issue_downloader.py rancher/dartboard
 
-# Save to a specific file
-./issue_analyzer.py rancher/dartboard issues.json
+# Export issues from SQLite database to JSON
+./issue_summarizer.py dartboard_issues.db
+
+# Or specify custom output files
+./issue_downloader.py rancher/dartboard issues.db
+./issue_summarizer.py issues.db issues.json
 
 # Use with GitHub token for higher rate limits
 export GITHUB_TOKEN=your_token
-./issue_analyzer.py rancher/dartboard
+./issue_downloader.py rancher/dartboard
 ```
 
 ## Features
 
+- **Two-stage workflow**: Download issues to SQLite first, then export to JSON
 - **Resilient data fetching**: Data is stored in a SQLite database as it is fetched, providing resilience against network errors and power loss
-- **Resume capability**: On restart, the script resumes from where it left off, skipping issues already in the database
+- **Resume capability**: On restart, the downloader resumes from where it left off, skipping issues already in the database
 - **Automatic retry**: Retries failed HTTP requests up to 10 times with exponential backoff
 - **Detailed error logging**: Logs full response body on HTTP errors for debugging
 
 ### Resume Behavior
 
-The script creates a SQLite database file (`<output>_issues.db`) alongside the JSON output file. If the script is interrupted or fails:
+The `issue_downloader.py` script creates a SQLite database file. If the script is interrupted or fails:
 
 1. Re-run the same command to resume from where it left off
 2. Issues already in the database will be skipped
