@@ -195,8 +195,79 @@ def save_issue_with_comments(
         raise
 
 
+def filter_issue_fields(issue: dict[str, Any]) -> dict[str, Any]:
+    """Filter issue to keep only required fields."""
+    filtered: dict[str, Any] = {}
+
+    # Simple fields
+    for field in [
+        "number",
+        "title",
+        "state",
+        "created_at",
+        "updated_at",
+        "body",
+        "author_association",
+        "state_reason",
+    ]:
+        if field in issue:
+            filtered[field] = issue[field]
+
+    # Nested user fields
+    if "user" in issue and issue["user"]:
+        filtered["user"] = {
+            "login": issue["user"].get("login"),
+            "type": issue["user"].get("type"),
+        }
+
+    # Nested reactions field
+    if "reactions" in issue and issue["reactions"]:
+        filtered["reactions"] = {
+            "total_count": issue["reactions"].get("total_count"),
+        }
+
+    return filtered
+
+
+def filter_comment_fields(comment: dict[str, Any]) -> dict[str, Any]:
+    """Filter comment to keep only required fields."""
+    filtered: dict[str, Any] = {}
+
+    # Simple fields
+    for field in [
+        "created_at",
+        "updated_at",
+        "body",
+        "author_association",
+    ]:
+        if field in comment:
+            filtered[field] = comment[field]
+
+    # Nested user fields
+    if "user" in comment and comment["user"]:
+        filtered["user"] = {
+            "login": comment["user"].get("login"),
+            "type": comment["user"].get("type"),
+        }
+
+    # Nested reactions field
+    if "reactions" in comment and comment["reactions"]:
+        filtered["reactions"] = {
+            "total_count": comment["reactions"].get("total_count"),
+        }
+
+    return filtered
+
+
 def export_database_to_json(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Export all issues and comments from the database to a list of dicts."""
+    """Export all issues and comments from the database to a list of dicts.
+
+    Filters out unnecessary fields to keep only essential information:
+    - For issues: number, title, user/login, user/type, state, created_at,
+      updated_at, body, author_association, reactions/total_count, state_reason
+    - For comments: user/login, user/type, created_at, updated_at, body,
+      author_association, reactions/total_count
+    """
     issues: list[dict[str, Any]] = []
 
     cursor = conn.execute("SELECT number, data FROM issues ORDER BY number DESC")
@@ -204,15 +275,20 @@ def export_database_to_json(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         issue_number, issue_data = row
         issue = json.loads(issue_data)
 
-        # Fetch comments for this issue
+        # Fetch and filter comments for this issue
         comments_cursor = conn.execute(
             "SELECT data FROM comments WHERE issue_number = ? ORDER BY id",
             (issue_number,),
         )
-        comments = [json.loads(c[0]) for c in comments_cursor.fetchall()]
-        issue["comments_data"] = comments
+        comments = [
+            filter_comment_fields(json.loads(c[0])) for c in comments_cursor.fetchall()
+        ]
 
-        issues.append(issue)
+        # Filter issue fields and add comments
+        filtered_issue = filter_issue_fields(issue)
+        filtered_issue["comments_data"] = comments
+
+        issues.append(filtered_issue)
 
     return issues
 
