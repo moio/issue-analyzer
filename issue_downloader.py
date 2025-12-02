@@ -233,7 +233,11 @@ def save_issue_with_comments(
         raise
 
 
-def fetch_comments(comments_url: str, headers: dict[str, str]) -> list[dict[str, Any]]:
+def fetch_comments(
+    comments_url: str,
+    headers: dict[str, str],
+    rate_limiter: RateLimiter | None = None,
+) -> list[dict[str, Any]]:
     """Fetch all comments for an issue using Link header pagination."""
     comments: list[dict[str, Any]] = []
     per_page = 100
@@ -268,7 +272,7 @@ def download_issues(
     db_path: str,
     limit: int | None = None,
     rate_limit: int = DEFAULT_RATE_LIMIT,
-) -> list[dict[str, Any]]:
+) -> int:
     """Download all issues and their comments from a GitHub repository.
 
     Uses SQLite database for persistence. On restart, skips issues already
@@ -430,7 +434,7 @@ Note: Issues already in the database are not refreshed.
     db_path = args.output or f"{repo}_issues.db"
 
     try:
-        issues = download_issues(
+        total_issues = download_issues(
             owner, repo, db_path, limit=args.limit, rate_limit=args.rate_limit
         )
     except requests.exceptions.HTTPError as e:
@@ -440,7 +444,7 @@ Note: Issues already in the database are not refreshed.
         print(f"Network error: {e}", file=sys.stderr)
         return 1
 
-    print(f"Database {db_path} contains {len(issues)} issues", file=sys.stderr)
+    print(f"Database {db_path} contains {total_issues} issues", file=sys.stderr)
     return 0
 
 
